@@ -17,5 +17,6 @@ export interface GameRepository {
   addRound(gameId: string, input: RoundInput): Promise<Game>;
   setPodridaBets(gameId: string, input: PodridaBetsInput): Promise<Game>;
   addPodridaRound(gameId: string, input: PodridaRoundInput): Promise<Game>;
+  deleteOpenGame(gameId: string): Promise<void>;
   finishGame(gameId: string): Promise<Game>;
 }

@@ -111,6 +111,7 @@ export default function HomePage() {
   ]);
   const [theme, setTheme] = useState<ThemeMode>('light');
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [deletingGameId, setDeletingGameId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   const loadData = useCallback(async () => {
@@ -281,6 +282,28 @@ export default function HomePage() {
       applyTheme(nextTheme);
       return nextTheme;
     });
+  };
+
+  const handleDeleteOpenGame = async (game: Game) => {
+    const shouldDelete = window.confirm(
+      `¿Seguro que quieres borrar la partida abierta "${getGameDisplayName(game)}"? Esta acción no se puede deshacer.`
+    );
+
+    if (!shouldDelete) {
+      return;
+    }
+
+    setError(null);
+    setDeletingGameId(game.id);
+
+    try {
+      await repository.deleteOpenGame(game.id);
+      await loadData();
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : 'No se pudo borrar la partida.');
+    } finally {
+      setDeletingGameId(null);
+    }
   };
 
   return (
@@ -465,9 +488,19 @@ export default function HomePage() {
                     </div>
                   </div>
 
-                  <Link href={`/game/${game.id}`} className="primary inline-btn">
-                    Abrir
-                  </Link>
+                  <div className="game-item-actions">
+                    <Link href={`/game/${game.id}`} className="primary inline-btn">
+                      Abrir
+                    </Link>
+                    <button
+                      type="button"
+                      className="danger game-delete-btn"
+                      onClick={() => void handleDeleteOpenGame(game)}
+                      disabled={deletingGameId === game.id}
+                    >
+                      {deletingGameId === game.id ? 'Borrando...' : 'Borrar'}
+                    </button>
+                  </div>
                 </li>
               );
             })}

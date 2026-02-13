@@ -476,6 +476,28 @@ export class LocalStorageGameRepository implements GameRepository {
     return updatedGame;
   }
 
+  async deleteOpenGame(gameId: string): Promise<void> {
+    const data = readData();
+    const gameIndex = data.games.findIndex((game) => game.id === gameId);
+
+    if (gameIndex < 0) {
+      throw new Error('No se encontró la partida.');
+    }
+
+    const game = data.games[gameIndex];
+
+    if (game.status !== 'open') {
+      throw new Error('Solo se pueden borrar partidas abiertas.');
+    }
+
+    const games = data.games.filter((currentGame) => currentGame.id !== gameId);
+
+    writeData({
+      ...data,
+      games
+    });
+  }
+
   async finishGame(gameId: string): Promise<Game> {
     const data = readData();
     const gameIndex = data.games.findIndex((game) => game.id === gameId);
