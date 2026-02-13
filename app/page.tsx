@@ -4,8 +4,8 @@ import Link from 'next/link';
 import { FormEvent, useCallback, useEffect, useMemo, useState } from 'react';
 import { FiMoon, FiSun, FiTrash2 } from 'react-icons/fi';
 import { getGameRepository } from '@/lib/storage';
-import { Game, RecentPlayer } from '@/lib/types';
-import { getGameDisplayName, getGameTotals } from '@/lib/utils/game';
+import { Game, GameType, RecentPlayer } from '@/lib/types';
+import { getGameDisplayName, getGameTotals, getGameType } from '@/lib/utils/game';
 
 interface PlayerDraft {
   name: string;
@@ -95,11 +95,16 @@ function formatDate(value: string): string {
   });
 }
 
+function getGameTypeLabel(gameType: GameType): string {
+  return gameType === 'podrida' ? 'Podrida' : 'Libre';
+}
+
 export default function HomePage() {
   const repository = useMemo(() => getGameRepository(), []);
   const [games, setGames] = useState<Game[]>([]);
   const [recentPlayers, setRecentPlayers] = useState<RecentPlayer[]>([]);
   const [gameName, setGameName] = useState('');
+  const [gameType, setGameType] = useState<GameType>('classic');
   const [players, setPlayers] = useState<PlayerDraft[]>([
     createPlayerDraft(),
     createPlayerDraft()
@@ -241,6 +246,7 @@ export default function HomePage() {
 
   const resetForm = () => {
     setGameName('');
+    setGameType('classic');
     setPlayers([createPlayerDraft(), createPlayerDraft()]);
   };
 
@@ -252,6 +258,7 @@ export default function HomePage() {
     try {
       const game = await repository.createGame({
         name: gameName,
+        type: gameType,
         players: players.map((player) => ({
           name: player.name,
           color: player.color
@@ -306,6 +313,17 @@ export default function HomePage() {
               value={gameName}
               onChange={(event) => setGameName(event.target.value)}
             />
+          </label>
+
+          <label className="field">
+            <span>Tipo de partida</span>
+            <select
+              value={gameType}
+              onChange={(event) => setGameType(event.target.value as GameType)}
+            >
+              <option value="classic">Partida libre</option>
+              <option value="podrida">Podrida</option>
+            </select>
           </label>
 
           <div className="subsection-header">
@@ -410,7 +428,10 @@ export default function HomePage() {
               return (
                 <li key={game.id} className="game-item">
                   <div>
-                    <h3>{getGameDisplayName(game)}</h3>
+                    <div className="game-title-line">
+                      <h3>{getGameDisplayName(game)}</h3>
+                      <span className="game-type-badge">{getGameTypeLabel(getGameType(game))}</span>
+                    </div>
                     <p>
                       {game.players.length} jugadores · {game.rounds.length} rondas · creada{' '}
                       {formatDate(game.createdAt)}
@@ -467,7 +488,10 @@ export default function HomePage() {
             {finishedGames.map((game) => (
               <li key={game.id} className="game-item">
                 <div>
-                  <h3>{getGameDisplayName(game)}</h3>
+                  <div className="game-title-line">
+                    <h3>{getGameDisplayName(game)}</h3>
+                    <span className="game-type-badge">{getGameTypeLabel(getGameType(game))}</span>
+                  </div>
                   <p>
                     {game.players.length} jugadores · {game.rounds.length} rondas · finalizada{' '}
                     {game.finishedAt ? formatDate(game.finishedAt) : '-'}

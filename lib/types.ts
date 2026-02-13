@@ -1,4 +1,5 @@
 export type GameStatus = 'open' | 'finished';
+export type GameType = 'classic' | 'podrida';
 
 export interface Player {
   id: string;
@@ -17,17 +18,26 @@ export interface Round {
   createdAt: string;
   mode: 'add' | 'set';
   entries: RoundEntry[];
+  type?: 'classic' | 'podrida';
+  cardsCount?: number;
+  betsByPlayerId?: Record<string, number>;
+}
+
+export interface PodridaState {
+  pendingBetsByPlayerId?: Record<string, number>;
 }
 
 export interface Game {
   id: string;
   name?: string;
+  type: GameType;
   players: Player[];
   rounds: Round[];
   status: GameStatus;
   createdAt: string;
   updatedAt: string;
   finishedAt?: string;
+  podridaState?: PodridaState;
 }
 
 export interface RecentPlayer {
@@ -50,9 +60,18 @@ export interface NewPlayerInput {
 export interface CreateGameInput {
   name?: string;
   players: NewPlayerInput[];
+  type?: GameType;
 }
 
 export interface RoundInput {
   mode: 'add' | 'set';
   valuesByPlayerId: Record<string, number>;
+}
+
+export interface PodridaBetsInput {
+  betsByPlayerId: Record<string, number>;
+}
+
+export interface PodridaRoundInput {
+  totalsByPlayerId: Record<string, number>;
 }

@@ -2,13 +2,17 @@ import {
   AppData,
   CreateGameInput,
   Game,
+  GameType,
   NewPlayerInput,
   Player,
+  PodridaBetsInput,
+  PodridaRoundInput,
   RecentPlayer,
   Round,
   RoundInput
 } from '@/lib/types';
 import { createId } from '@/lib/utils/id';
+import { getNextPodridaCards, getPodridaMaxCards } from '@/lib/utils/game';
 import { GameRepository } from '@/lib/storage/repository';
 
 const STORAGE_KEY = 'scores-recorder:v1';
@@ -29,6 +33,80 @@ function normalizeName(value: string): string {
   return value.trim().replace(/\s+/g, ' ');
 }
 
+function getGameType(game: Game): GameType {
+  return game.type === 'podrida' ? 'podrida' : 'classic';
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function toNumericRecord(value: unknown): Record<string, number> {
+  if (!isRecord(value)) {
+    return {};
+  }
+
+  const output: Record<string, number> = {};
+
+  for (const [key, rawValue] of Object.entries(value)) {
+    const numericValue = Number(rawValue);
+
+    if (Number.isFinite(numericValue)) {
+      output[key] = numericValue;
+    }
+  }
+
+  return output;
+}
+
+function normalizeRound(round: Round): Round {
+  const mode = round.mode === 'set' ? 'set' : 'add';
+  const entries = Array.isArray(round.entries) ? round.entries : [];
+  const base: Round = {
+    id: round.id,
+    createdAt: round.createdAt,
+    mode,
+    entries
+  };
+
+  if (
+    round.type === 'podrida' &&
+    typeof round.cardsCount === 'number' &&
+    Number.isFinite(round.cardsCount)
+  ) {
+    return {
+      ...base,
+      type: 'podrida',
+      mode: 'set',
+      cardsCount: round.cardsCount,
+      betsByPlayerId: toNumericRecord(round.betsByPlayerId)
+    };
+  }
+
+  return {
+    ...base,
+    type: 'classic'
+  };
+}
+
+function normalizeGame(game: Game): Game {
+  const type = getGameType(game);
+  const rounds = Array.isArray(game.rounds) ? game.rounds.map(normalizeRound) : [];
+  const pendingBetsByPlayerId = toNumericRecord(game.podridaState?.pendingBetsByPlayerId);
+
+  return {
+    ...game,
+    type,
+    rounds,
+    podridaState:
+      type === 'podrida'
+        ? {
+            pendingBetsByPlayerId
+          }
+        : undefined
+  };
+}
+
 function readData(): AppData {
   assertBrowser();
   const raw = window.localStorage.getItem(STORAGE_KEY);
@@ -41,7 +119,7 @@ function readData(): AppData {
     const parsed = JSON.parse(raw) as AppData;
 
     return {
-      games: Array.isArray(parsed.games) ? parsed.games : [],
+      games: Array.isArray(parsed.games) ? parsed.games.map((game) => normalizeGame(game)) : [],
       recentPlayers: Array.isArray(parsed.recentPlayers) ? parsed.recentPlayers : []
     };
   } catch {
@@ -150,15 +228,28 @@ export class LocalStorageGameRepository implements GameRepository {
       throw new Error('Debes ingresar al menos 2 jugadores.');
     }
 
+    if (input.type === 'podrida' && getPodridaMaxCards(players.length) < 3) {
+      throw new Error(
+        'Con esta cantidad de jugadores no se puede iniciar Podrida (mínimo 3 cartas por jugador).'
+      );
+    }
+
     const now = new Date().toISOString();
     const game: Game = {
       id: createId('game'),
       name: input.name?.trim() || undefined,
+      type: input.type === 'podrida' ? 'podrida' : 'classic',
       players,
       rounds: [],
       status: 'open',
       createdAt: now,
-      updatedAt: now
+      updatedAt: now,
+      podridaState:
+        input.type === 'podrida'
+          ? {
+              pendingBetsByPlayerId: {}
+            }
+          : undefined
     };
 
     const nextData: AppData = {
@@ -179,9 +270,14 @@ export class LocalStorageGameRepository implements GameRepository {
     }
 
     const game = data.games[gameIndex];
+    const gameType = getGameType(game);
 
     if (game.status === 'finished') {
       throw new Error('La partida está finalizada.');
+    }
+
+    if (gameType !== 'classic') {
+      throw new Error('Esta partida usa reglas especiales. Usa la carga de Podrida.');
     }
 
     const playerIds = new Set(game.players.map((player) => player.id));
@@ -218,6 +314,7 @@ export class LocalStorageGameRepository implements GameRepository {
     const round: Round = {
       id: createId('round'),
       createdAt: now,
+      type: 'classic',
       mode: input.mode,
       entries
     };
@@ -226,6 +323,146 @@ export class LocalStorageGameRepository implements GameRepository {
       ...game,
       rounds: [...game.rounds, round],
       updatedAt: now
+    };
+
+    const games = [...data.games];
+    games[gameIndex] = updatedGame;
+
+    writeData({
+      ...data,
+      games
+    });
+
+    return updatedGame;
+  }
+
+  async setPodridaBets(gameId: string, input: PodridaBetsInput): Promise<Game> {
+    const data = readData();
+    const gameIndex = data.games.findIndex((game) => game.id === gameId);
+
+    if (gameIndex < 0) {
+      throw new Error('No se encontró la partida.');
+    }
+
+    const game = data.games[gameIndex];
+
+    if (game.status === 'finished') {
+      throw new Error('La partida está finalizada.');
+    }
+
+    if (getGameType(game) !== 'podrida') {
+      throw new Error('Solo las partidas de Podrida permiten apuestas por ronda.');
+    }
+
+    const nextCardsCount = getNextPodridaCards(game);
+
+    if (nextCardsCount === null) {
+      throw new Error('La secuencia de Podrida ya está completa.');
+    }
+
+    const betsByPlayerId: Record<string, number> = {};
+
+    for (const player of game.players) {
+      const betValue = Number(input.betsByPlayerId[player.id]);
+
+      if (!Number.isFinite(betValue) || !Number.isInteger(betValue)) {
+        throw new Error(`Debes ingresar una apuesta entera para ${player.name}.`);
+      }
+
+      betsByPlayerId[player.id] = betValue;
+    }
+
+    const now = new Date().toISOString();
+    const updatedGame: Game = {
+      ...game,
+      updatedAt: now,
+      podridaState: {
+        pendingBetsByPlayerId: betsByPlayerId
+      }
+    };
+
+    const games = [...data.games];
+    games[gameIndex] = updatedGame;
+
+    writeData({
+      ...data,
+      games
+    });
+
+    return updatedGame;
+  }
+
+  async addPodridaRound(gameId: string, input: PodridaRoundInput): Promise<Game> {
+    const data = readData();
+    const gameIndex = data.games.findIndex((game) => game.id === gameId);
+
+    if (gameIndex < 0) {
+      throw new Error('No se encontró la partida.');
+    }
+
+    const game = data.games[gameIndex];
+
+    if (game.status === 'finished') {
+      throw new Error('La partida está finalizada.');
+    }
+
+    if (getGameType(game) !== 'podrida') {
+      throw new Error('Solo las partidas de Podrida usan este flujo de ronda.');
+    }
+
+    const nextCardsCount = getNextPodridaCards(game);
+
+    if (nextCardsCount === null) {
+      throw new Error('La secuencia de Podrida ya está completa.');
+    }
+
+    const pendingBetsByPlayerId = game.podridaState?.pendingBetsByPlayerId ?? {};
+    const currentTotals = getTotals(game);
+    const entries: Round['entries'] = [];
+    const betsByPlayerId: Record<string, number> = {};
+
+    for (const player of game.players) {
+      const betValue = Number(pendingBetsByPlayerId[player.id]);
+      const totalValue = Number(input.totalsByPlayerId[player.id]);
+
+      if (!Number.isFinite(betValue) || !Number.isInteger(betValue)) {
+        throw new Error(`Debes guardar primero la apuesta de ${player.name}.`);
+      }
+
+      if (!Number.isFinite(totalValue)) {
+        throw new Error(`Debes ingresar el total acumulado de ${player.name}.`);
+      }
+
+      const currentTotal = currentTotals[player.id] ?? 0;
+      const totalAfter = totalValue;
+
+      entries.push({
+        playerId: player.id,
+        delta: totalAfter - currentTotal,
+        totalAfter
+      });
+
+      betsByPlayerId[player.id] = betValue;
+    }
+
+    const now = new Date().toISOString();
+    const round: Round = {
+      id: createId('round'),
+      createdAt: now,
+      type: 'podrida',
+      mode: 'set',
+      cardsCount: nextCardsCount,
+      betsByPlayerId,
+      entries
+    };
+
+    const updatedGame: Game = {
+      ...game,
+      rounds: [...game.rounds, round],
+      updatedAt: now,
+      podridaState: {
+        pendingBetsByPlayerId: {}
+      }
     };
 
     const games = [...data.games];
